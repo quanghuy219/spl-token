@@ -36,10 +36,6 @@ async function swapAndMint() {
         return versionTx
     })
 
-    txs.forEach(tx => {
-        console.log(tx);
-    });
-
     await sendBundle(signer, txs, false);
 }
 
