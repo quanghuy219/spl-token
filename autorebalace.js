@@ -15,21 +15,20 @@ import { Program, } from "@coral-xyz/anchor";
 import idl from './idl/automation.js';
 import { toTransactionInstruction, wait } from './helper.js';
 import bs58 from 'bs58';
+import pRetry from 'p-retry';
 
 const userVaultSeed = "userVault";
 
 const heliusRpc = "https://mainnet.helius-rpc.com/?api-key=4476d287-682b-4b85-8dc9-b434aab8857c";
-const quicknodeRpc = "https://bold-special-brook.solana-mainnet.quiknode.pro/638b5de6ebd373f2d595976e7c1cfd11a2b1074c"
-const myQuicknodeRpc = "https://blissful-young-choice.solana-mainnet.quiknode.pro/322fc235a6a71f0559baecd4c373faac427c5f2b"
 
-const connection = new Connection(quicknodeRpc, 'confirmed');
+const connection = new Connection(heliusRpc, 'confirmed');
 const apiUrl = "http://localhost:8080"
 const program = new Program(idl, { connection });
 
 async function autoRebalance() {
     const signer = keyPairFromFile("keyfiles/BjrVZbbgTuaW9NDegdQg7zN4RK5wHEMNpYhtRRayHtpH.key.txt");
     const operator = signer.publicKey;
-    const tokenMintAddress = new PublicKey("3Q9NrEy6C8ta2vEzrgo9GDkr4bv9Sxk2Z2t577KuiSMx");
+    const tokenMintAddress = new PublicKey("As7xpaRqS4V2qthbEBPrHQZhQRqWmqmbnn7dS4rQgWcr");
 
     const params = {
         "nftMintAddress": tokenMintAddress.toBase58(),
@@ -63,25 +62,10 @@ async function autoRebalance() {
         signers: [signer, ...setupTxSigners]
     });
 
-    const setupSimulation = await connection.simulateTransaction(prepareTx);
-    console.log(setupSimulation.value);
-
     const setupTx = await connection.sendTransaction(prepareTx);
     console.log("setupTx", setupTx);
 
-    console.log("checking new lookup table data...")
-    await wait(3000);
-    let newLookupTable = null;
-
-    while (!newLookupTable) {
-        const _lutAccount = await connection.getAddressLookupTable(new PublicKey(newLookupTableAddress));
-        if (_lutAccount && _lutAccount.value && _lutAccount.value.state) {
-            newLookupTable = _lutAccount
-            break;
-        }
-        console.log("waiting for lookup table to be created...");
-        await wait(1000);
-    }
+    await resolveNewLookupTable(newLookupTableAddress);
 
     const { instructions: rebalanceIxs, signers: rebalanceSigners, lookupTableAddresses: rebalanceLookupTableAddresses } = ixData;
     const rebalanceTxSigners = rebalanceSigners.map((s) => {
@@ -97,17 +81,42 @@ async function autoRebalance() {
     });
 
     const rebalanceSimulation = await connection.simulateTransaction(rebalanceTx);
-    console.log(JSON.stringify(rebalanceSimulation.value));
     console.log("rebalance tx size", rebalanceTx.serialize().length);
 
     if (rebalanceSimulation.value.err) {
         console.log("rebalance simulation failed");
-        console.log(rebalanceSimulation.value.err);
+        console.log(JSON.stringify(rebalanceSimulation.value));
         return;
     }
 
     const rebalanceTxSig = await connection.sendTransaction(rebalanceTx, { skipPreflight: true });
     console.log("rebalance sig", rebalanceTxSig);
+}
+
+const LookupTableError = new Error("Lookup table not found");
+
+// Retry until the lookup table is resolved
+async function resolveNewLookupTable(address) {
+    const run = async () => {
+        const lut = await connection.getAddressLookupTable(new PublicKey(address));
+        if (lut && lut.value && lut.value.state) {
+            return lut.value;
+        }
+
+        throw LookupTableError;
+    };
+
+    return pRetry(run, {
+        retries: 15,
+        onFailedAttempt: async (error) => {
+            if (error === LookupTableError) {
+                console.log("Lookup table not found. Retrying...");
+            }
+        },
+        minTimeout: 2000,
+        maxTimeout: 2000,
+        factor: 1
+    })
 }
 
 async function buildTx({
@@ -236,10 +245,10 @@ async function getAutoRebalanceIxData(input) {
 }
 
 async function getEstimatePriorityFee() {
-    const jup = new PublicKey('JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4');
-    const raydium = new PublicKey('CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK');
+    const jupSwapRouter = new PublicKey('JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4');
+    const raydiumCLMM = new PublicKey('CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK');
     const prioritizationFeeObjects = await connection.getRecentPrioritizationFees({
-        lockedWritableAccounts: [jup, raydium],
+        lockedWritableAccounts: [jupSwapRouter, raydiumCLMM],
     });
 
     if (prioritizationFeeObjects.length === 0) {
@@ -255,8 +264,6 @@ async function getEstimatePriorityFee() {
     // Calculate the median of the non-zero fees
     const sortedFees = nonZeroFees.sort((a, b) => a - b);
 
-    console.log(sortedFees);
-
     let medianFee = 0;
     if (sortedFees.length > 0) {
         const midIndex = Math.floor(sortedFees.length / 2);
@@ -267,7 +274,7 @@ async function getEstimatePriorityFee() {
 
     console.log('Median prioritization fee:', medianFee);
 
-    return medianFee;
+    return medianFee == 0 ? 1000 : medianFee;
 }
 
 (async () => {
