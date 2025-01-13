@@ -48,6 +48,7 @@ async function autoRebalance() {
 
     const { setupIxData, ixData } = await getAutoRebalanceIxData(params);
 
+    // ============== Create lookup table ===============
     const { instructions: setupIxs, signers: setupSigners, lookupTableAddresses: setupLookupTableAddresses, setupLookupTableAddress: newLookupTableAddress } = setupIxData;
 
     console.log("newLookupTableAddress", newLookupTableAddress);
@@ -66,7 +67,9 @@ async function autoRebalance() {
     console.log("setupTx", setupTx);
 
     await resolveNewLookupTable(newLookupTableAddress);
+    // ===========================
 
+    // ============== Rebalance ===============
     const { instructions: rebalanceIxs, signers: rebalanceSigners, lookupTableAddresses: rebalanceLookupTableAddresses } = ixData;
     const rebalanceTxSigners = rebalanceSigners.map((s) => {
         return Keypair.fromSecretKey(bs58.decode(s));
