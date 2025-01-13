@@ -1,7 +1,6 @@
 import fs from 'fs';
 import bs58 from 'bs58';
-import { Keypair, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
-import nacl from 'tweetnacl';
+import { Keypair, TransactionMessage, VersionedTransaction, TransactionInstruction, PublicKey } from '@solana/web3.js';
 
 export const keyPairFromFile = (filename) => {
     const prvKey = fs.readFileSync(filename, 'utf8');
@@ -34,9 +33,29 @@ export async function buildTransaction({
 
     const tx = new VersionedTransaction(messageV0);
 
-    signers.forEach(s => {
-        tx.sign([s])
-    });
+    if (signers.length > 0) {
+        signers.forEach(s => {
+            tx.sign([s])
+        });
+    }
 
     return tx;
 }
+
+export function toTransactionInstruction(instruction) {
+    return new TransactionInstruction({
+        keys: instruction.accounts.map(acc => {
+            return {
+                pubkey: new PublicKey(acc.pubkey),
+                isSigner: acc.isSigner,
+                isWritable: acc.isWritable,
+            }
+        }),
+        data: Buffer.from(instruction.data, 'base64'),
+        programId: new PublicKey(instruction.programId),
+    });
+}
+
+export const wait = (msec) => new Promise((resolve, _) => {
+    setTimeout(resolve, msec)
+});
